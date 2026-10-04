@@ -1,0 +1,25 @@
+# OS / editors
+.DS_Store
+Thumbs.db
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Historical QA byproducts (curated copies live in screenshots/)
+test/shot-*.png
+test/shots/
+
+# Local runtime logs
+*.log
+
+# Internal build-process docs (kept local)
+backups/
+plans/
+progress/
+specs/
+thoughts/

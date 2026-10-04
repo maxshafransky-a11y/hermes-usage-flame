@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Usage Flame v2 — стенд</title>
+<script>
+  window.__ERRORS = []
+  window.__NOTIFS = []
+  window.__LOG = []
+  window.addEventListener('error', (e) => window.__ERRORS.push(String(e.message)))
+  window.addEventListener('unhandledrejection', (e) => window.__ERRORS.push('rejection: ' + String(e.reason)))
+</script>
+<script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@19.2.7",
+      "react/jsx-runtime": "https://esm.sh/react@19.2.7/jsx-runtime",
+      "react-dom/client": "https://esm.sh/react-dom@19.2.7/client?deps=react@19.2.7",
+      "@hermes/plugin-sdk": "./sdk-mock.mjs"
+    }
+  }
+</script>
+<style>
+  body { background: #16181d; color: #ccc; font: 13px/1.5 system-ui, 'Segoe UI', sans-serif; margin: 20px; }
+  #slot-bottom, #slot-top { min-height: 28px; border: 1px dashed #444; border-radius: 8px; padding: 4px 8px; margin-bottom: 14px; }
+  #result { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 12px; }
+  h3 { margin: 14px 0 6px; font-size: 12px; color: #888; }
+</style>
+</head>
+<body>
+<h3>slot: titleBar.right (верх)</h3>
+<div id="slot-top"></div>
+<h3>slot: statusBar.right (низ)</h3>
+<div id="slot-bottom"></div>
+<h3>result</h3>
+<div id="result">выполняется…</div>
+
+<script type="module">
+  // Чистим историю прогноза от прошлых прогонов (данные теста детерминированы).
+  try {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith('hermes.plugin.usage-flame.hist.'))
+      .forEach((k) => localStorage.removeItem(k))
+  } catch {
+    /* ignore */
+  }
+  const { createRoot } = await import('react-dom/client')
+  const sdk = await import('./sdk-mock.mjs')
+  const { default: plugin } = await import('./plugin.js?v=' + Date.now())
+  const log = (...a) => window.__LOG.push(a.join(' '))
+  window.__TEST_STEP = 'boot'
+  setTimeout(() => {
+    if (!window.__TEST_RESULT) {
+      window.__TEST_RESULT = {
+        phase: 'timeout',
+        step: window.__TEST_STEP || 'unknown',
+        errors: (window.__ERRORS || []).slice(),
+        notifs: (window.__NOTIFS || []).length
+      }
+    }
+  }, 30_000)
+
+  localStorage.clear()
+  localStorage.setItem('hermes.desktop.composer.provider', 'opencode-go')
+  localStorage.setItem('hermes.desktop.composer.model', 'deepseek-v4.1-flash')
+  window.__MOCK_MODE = new URLSearchParams(location.search).get('m') === 'light' ? 'light' : 'dark'
+
+  const storage = {
+    get(k, fb) {
+      const raw = localStorage.getItem('hermes.plugin.usage-flame.' + k)
+      if (raw === null) return fb
+      try { return JSON.parse(raw) } catch { return fb }
+    },
+    set(k, v) { localStorage.setItem('hermes.plugin.usage-flame.' + k, JSON.stringify(v)) },
+    remove(k) { localStorage.removeItem('hermes.plugin.usage-flame.' + k) }
+  }
+
+  const contributions = []
+  const ctx = {
+    source: 'plugin:usage-flame',
+    register: (c) => { contributions.push(c); return () => {} },
+    registerMany: (cs) => { cs.forEach((c) => contributions.push(c)); return () => {} },
+    rest: () => Promise.reject(new Error('no rest in mock')),
+    socket: () => () => {},
+    onEvent: () => () => {},
+    onDispose: () => {},
+    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); return () => clearTimeout(id) },
+    setInterval: (fn, ms) => { const id = setInterval(fn, ms); return () => clearInterval(id) },
+    addEventListener: (t, ty, fn, o) => { t.addEventListener(ty, fn, o); return () => t.removeEventListener(ty, fn, o) },
+    os: { notify: (n) => { window.__NOTIFS.push(Object.assign({}, n, { at: Date.now() })); return Promise.resolve(true) } },
+    storage,
+    i18n: {
+      register: (b) => { sdk.__registerMockBundles('usage-flame', b); return () => {} },
+      t: (k, ...a) => sdk.__translateMock('usage-flame', window.__LOCALE || 'ru', k, a),
+      onLocaleChange: () => () => {},
+      registerAppLocale: () => () => {}
+    }
+  }
+
+  plugin.register(ctx)
+  await new Promise((r) => setTimeout(r, 400))
+
+  const mounts = {}
+  for (const area of ['statusBar.right', 'titleBar.right']) {
+    const c = contributions.find((x) => x.area === area)
+    const hostEl = area === 'statusBar.right' ? document.getElementById('slot-bottom') : document.getElementById('slot-top')
+    const root = createRoot(hostEl)
+    root.render(c.render())
+    mounts[area] = root
+  }
+  await new Promise((r) => setTimeout(r, 500))
+  window.__TEST_STEP = 'mounted'
+
+  let doc
+  try {
+    doc = await (await fetch('./doc.json')).json()
+  } catch (e) {
+    window.__TEST_RESULT = { phase: 'doc-fail', error: String(e) }
+    throw e
+  }
+  window.__TEST_STEP = 'doc'
+  const rem = doc.windows.map((w) => Math.round(100 - w.used_percent))
+  const res = { phase: 1, contributions: contributions.map((c) => c.area), expectedRemaining: rem }
+
+  const text = (el) => (el ? el.textContent : '')
+  const bottomSlot = document.getElementById('slot-bottom')
+  const chipBtn = bottomSlot.querySelector('button')
+  res.chipExists = !!chipBtn
+  res.chipText = text(chipBtn)
+  res.chipHasFlame = !!(chipBtn && chipBtn.querySelector('svg'))
+  res.topEmptyInitially = !document.getElementById('slot-top').querySelector('button')
+
+  // низ: 3 числа = остатки; сверим что каждое ожидаемое число есть в чипе
+  res.chipShowsAllRemaining = rem.every((n) => res.chipText.includes(String(n) + '%'))
+  res.chipLabels = ['5ч', 'нед', 'мес'].every((l) => res.chipText.includes(l))
+
+  // открыть панель
+  chipBtn.click()
+  await new Promise((r) => setTimeout(r, 200))
+  const panel = bottomSlot.querySelector('[data-testid=popover]')
+  res.panelOpens = !!panel
+  // Панель читаем свежей ссылкой (Radix может пересоздавать контент).
+  const panelLive = () => bottomSlot.querySelector('[data-testid=popover]') || panel
+  // Секция «ВСЕ ПРОВАЙДЕРЫ» свёрнута по умолчанию — раскрываем для проверок.
+  res.allToggleFound = !![...panelLive().querySelectorAll('button')].find((b) => b.textContent.includes('ВСЕ ПРОВАЙДЕРЫ'))
+  res.allCollapsedDefault = !panelLive().querySelector('.uf-prov')
+  {
+    const b = [...panelLive().querySelectorAll('button')].find((x) => x.textContent.includes('ВСЕ ПРОВАЙДЕРЫ'))
+    if (b) b.click()
+  }
+  await new Promise((r) => setTimeout(r, 350))
+  res.panelText = text(panelLive()).slice(0, 400)
+  res.panelHasAll = text(panelLive()).includes('ВСЕ ПРОВАЙДЕРЫ')
+  res.panelHasProviders = text(panelLive()).includes('OpenCode Go') && text(panelLive()).includes('OpenAI Codex')
+  res.panelHasNoData = text(panelLive()).includes('нет данных')
+  res.noForecastEarly = !panelLive().querySelector('.uf-spark')
+  // полосы = остаток (совпадают с числами)
+  const barWidths = [...panelLive().querySelectorAll('i')].map((el) => el.style.width)
+  res.barsMatchRemaining = rem.every((n) => barWidths.includes(n + '%'))
+  window.__TEST_STEP = 'panel'
+
+  // тумблер «заголовок» → верхний чип появляется
+  const tglTop = [...panelLive().querySelectorAll('button')].find((b) => b.textContent.includes('заголовок'))
+  res.toggleFound = !!tglTop
+  tglTop && tglTop.click()
+  await new Promise((r) => setTimeout(r, 250))
+  res.topChipAppears = !!document.getElementById('slot-top').querySelector('button')
+  res.settingsTop = JSON.parse(localStorage.getItem('hermes.plugin.usage-flame.settings') || '{}').top === true
+  res.pillActiveMark = [...panelLive().querySelectorAll('button')].some((b) => b.textContent.startsWith('✓'))
+  // сортировка «все провайдеры»: c данными — выше пустых
+  res.sortedOkFirst =
+    panelLive().textContent.indexOf('OpenCode Go', panelLive().textContent.indexOf('ВСЕ ПРОВАЙДЕРЫ')) <
+    panelLive().textContent.indexOf('OpenAI Codex')
+
+  // Пин провайдера удалён полностью: строки — некликабельные, кнопки «Следовать за выбранным» быть не должно.
+  res.noPinFeature = !panelLive().textContent.includes('Следовать за выбранным')
+
+  // ── темы v2: кнопка в шапке, пикер, применение ──
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+  const themeBtn = [...panelLive().querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'ТЕМА')
+  res.themeBtnFound = !!themeBtn
+  if (themeBtn) themeBtn.click()
+  await wait(250)
+  const picker = bottomSlot.querySelector('.uf-picker')
+  res.pickerOpens = !!picker
+  res.pickerSwatchCount = picker ? picker.querySelectorAll('button').length : 0
+  if (picker) {
+    const cardForRect = bottomSlot.querySelector('.uf-card')
+    const pr = picker.getBoundingClientRect()
+    const cr = cardForRect ? cardForRect.getBoundingClientRect() : null
+    res.pickerContained = !!cr && pr.left >= cr.left - 1 && pr.right <= cr.right + 1
+    const bg = getComputedStyle(picker).backgroundColor || ''
+    res.pickerSolid = bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent'
+  }
+  const neonBtn = picker && [...picker.querySelectorAll('button')].find((b) => String(b.getAttribute('aria-label') || '').includes('Неон'))
+  res.neonBtnFound = !!neonBtn
+  const firstPct = rem[0] + '%'
+  const num87Before = [...chipBtn.querySelectorAll('span')].find((s) => s.textContent === firstPct)
+  res.chipToneBefore = num87Before ? num87Before.style.color : ''
+  if (neonBtn) neonBtn.click()
+  await wait(300)
+  const st = () => JSON.parse(localStorage.getItem('hermes.plugin.usage-flame.settings') || '{}')
+  res.themeAfterNeon = st().theme
+  const stop1 = document.querySelector('#slot-bottom svg stop')
+  res.flameStop = stop1 ? stop1.getAttribute('stop-color') : ''
+  const num87c = [...chipBtn.querySelectorAll('span')].find((s) => s.textContent === firstPct)
+  res.chipToneAfterNeon = num87c ? num87c.style.color : ''
+  res.chipToneChanges = !!res.chipToneBefore && !!res.chipToneAfterNeon && res.chipToneBefore !== res.chipToneAfterNeon
+  const p5 = picker && [...picker.querySelectorAll('button')].find((b) => b.textContent.includes('5 мин'))
+  res.refresh5Found = !!p5
+  if (p5) p5.click()
+  await wait(250)
+  res.refreshMin = st().refreshMin
+  // шрифт и размер
+  const bookBtn = picker && [...picker.querySelectorAll('button')].find((b) => b.textContent.includes('Книжный'))
+  res.fontBtnFound = !!bookBtn
+  if (bookBtn) bookBtn.click()
+  await wait(250)
+  res.fontAfterBook = st().font
+  const xlBtn = picker && [...picker.querySelectorAll('button')].find((b) => b.textContent.includes('Очень крупный'))
+  res.sizeBtnFound = !!xlBtn
+  if (xlBtn) xlBtn.click()
+  await wait(250)
+  res.sizeAfterXl = st().fontScale
+  const cardEl = bottomSlot.querySelector('.uf-card')
+  res.cardZoom = cardEl ? String(cardEl.style.zoom || '') : ''
+  res.cardFont = cardEl ? String(cardEl.style.fontFamily || '') : ''
+  res.tnumOk = !!cardEl && String(cardEl.style.fontFeatureSettings).includes('lnum') && String(cardEl.style.fontVariantNumeric).includes('tabular')
+  res.bookCambria = String(res.cardFont).includes('Cambria')
+  // горение полосы при низком остатке (13% — ниже порога 20%)
+  res.burnClass = !!bottomSlot.querySelector('.uf-burn')
+  const themeCmd = contributions.find((c) => c.data && c.data.id === 'usage-flame.theme')
+  res.themeCmdFound = !!themeCmd
+  if (themeCmd) themeCmd.data.run()
+  await wait(200)
+  res.themeAfterCmd = st().theme
+  // жирные подписи окон у провайдеров + порядок окон в деталях
+  // сворачиваемая секция: сейчас открыта (раскрыта ранее) → закрыть → снова открыть
+  const rowOpen = () => [...panelLive().querySelectorAll('.uf-prov')].some((b) => b.textContent.includes('5ч'))
+  const allToggle = () => [...panelLive().querySelectorAll('button')].find((b) => b.textContent.includes('ВСЕ ПРОВАЙДЕРЫ'))
+  res.allToggleOpened = rowOpen()
+  if (allToggle()) allToggle().click()
+  await new Promise((r) => setTimeout(r, 300))
+  res.allToggleClosed = !rowOpen()
+  if (allToggle()) allToggle().click()
+  await new Promise((r) => setTimeout(r, 300))
+  const provRow = [...panelLive().querySelectorAll('.uf-prov')].find((b) => b.textContent.includes('OpenCode Go'))
+  const provWinLabels = provRow ? [...provRow.querySelectorAll('span')].filter((s) => ['5ч', 'нед', 'мес'].includes(s.textContent)) : []
+  res.provLabelsBold = provWinLabels.length === 3 && provWinLabels.every((s) => s.style.fontWeight === '700')
+  const provNums = provRow ? [...provRow.querySelectorAll('span')].filter((s) => /^\d+%$/.test(s.textContent)) : []
+  res.provNumsBig = provNums.length >= 3 && provNums.every((s) => parseFloat(s.style.fontSize) >= 13)
+  res.provNumsAura = provNums.length >= 3 && provNums.every((s) => String(s.style.textShadow || '').includes('px'))
+  res.windowOrderOk =
+    panelLive().textContent.indexOf('5 часов') < panelLive().textContent.indexOf('Неделя') &&
+    panelLive().textContent.indexOf('Неделя') < panelLive().textContent.indexOf('Месяц')
+  // чип на светлой теме: подписи наследуют цвет (видимы), числа — светлые тона
+  const chipLabelsNow = [...chipBtn.querySelectorAll('span')].filter((s) => ['5ч', 'нед', 'мес'].includes(s.textContent))
+  res.chipLabelsInherit = chipLabelsNow.length === 3 && chipLabelsNow.every((s) => s.style.color === '')
+  const num87 = [...chipBtn.querySelectorAll('span')].find((s) => s.textContent === firstPct)
+  res.chipToneFinal = num87 ? num87.style.color : ''
+  res.chipToneLight = !!num87 && res.chipToneFinal !== '' && res.chipToneFinal !== 'rgb(255, 179, 71)'
+  res.mockMode = window.__MOCK_MODE
+
+  // ── инвариант «хотя бы один чип виден» ──
+  const panelNow = () => bottomSlot.querySelector('[data-testid=popover]')
+  const clickToggle = async (label) => {
+    const p = panelNow()
+    const b = p && [...p.querySelectorAll('button')].find((x) => x.textContent.includes(label))
+    if (b) b.click()
+    await new Promise((r) => setTimeout(r, 220))
+    return !!b
+  }
+  const S = () => JSON.parse(localStorage.getItem('hermes.plugin.usage-flame.settings') || '{}')
+  // A: верх выключить (низ включён) — разрешено
+  res.tOff = await clickToggle('заголовок')
+  res.topOffAllowed = S().top === false
+  // B: попытка выключить низ, когда верх выключен — блокируется
+  res.tBottomBlocked = await clickToggle('строка статуса')
+  res.stillVisible = S().bottom === true
+  res.invariantToast = (window.__TOASTS || []).some((m) => m.includes('Хотя бы'))
+  // C: включить верх, затем выключить низ — разрешено
+  await clickToggle('заголовок')
+  await clickToggle('строка статуса')
+  res.bottomHiddenNow = !bottomSlot.querySelector('button')
+  res.topStillVisible = !!(document.getElementById('slot-top') || {}).querySelector
+    ? !!document.getElementById('slot-top').querySelector('button')
+    : false
+  // D: возврат нижнего чипа командой ⌘K
+  const showCmd = contributions.find((c) => c.data && c.data.id === 'usage-flame.show')
+  res.showCmdFound = !!showCmd
+  showCmd.data.run()
+  await new Promise((r) => setTimeout(r, 350))
+  res.bottomBackAfterPalette = !!bottomSlot.querySelector('button')
+  res.errorsAfterInvariant = window.__ERRORS.slice()
+  window.__TEST_STEP = 'invariant'
+
+  // LOW-режим: остаток 9% → пульс + уведомление один раз
+  window.__TEST_STEP = 'low'
+  window.__MOCK_LOW = true
+  const palette = contributions.find((c) => c.data && c.data.id === 'usage-flame.refresh')
+  res.paletteFound = !!palette
+  window.__RES = res
+  palette.data.run()
+  window.__TEST_STEP = 'low-1'
+  // ждём, пока данные доедут (до 4 с)
+  let lowText = ''
+  for (let i = 0; i < 40; i++) {
+    window.__LOOPI = i
+    await new Promise((r) => setTimeout(r, 100))
+    lowText = text(bottomSlot.querySelector('button'))
+    if (lowText.includes('9%')) break
+  }
+  window.__TEST_STEP = 'low-2'
+  await new Promise((r) => setTimeout(r, 400))
+  const chipAfter = bottomSlot.querySelector('button')
+  res.lowChipText = lowText
+  res.pulseClass = !!(chipAfter && chipAfter.className.includes('uf-sos'))
+  res.notifs = window.__NOTIFS.map((n) => n.body)
+  // повторный refresh — дублей быть не должно
+  palette.data.run()
+  window.__TEST_STEP = 'low-3'
+  await new Promise((r) => setTimeout(r, 1500))
+  res.notifsAfterSecond = window.__NOTIFS.length
+  window.__TEST_STEP = 'low-4'
+
+  // ── прогноз исчерпания + спарклайн: сеем историю и обновляемся ──
+  {
+    const c0 = JSON.parse(localStorage.getItem('hermes.plugin.usage-flame.cache.current') || 'null')
+    const w0 = c0 && c0.snapshot && c0.snapshot.windows && c0.snapshot.windows[0]
+    if (w0) {
+      const reset = String(w0.resets_at || '')
+      const now0 = Date.now()
+      const arr = []
+      for (let i = 6; i >= 0; i--) arr.push([now0 - i * 600000, 60 + (6 - i) * 1.5, reset])
+      const h = {}
+      h[w0.label] = arr
+      localStorage.setItem('hermes.plugin.usage-flame.hist.opencode-go', JSON.stringify(h))
+    }
+  }
+  palette.data.run()
+  let fcPanel = ''
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 120))
+    fcPanel = (bottomSlot.querySelector('[data-testid=popover]') || panel).textContent
+    if (fcPanel.includes('темп')) break
+  }
+  res.forecastShown = /темп [\d.,]+%\/ч/.test(fcPanel)
+  res.forecastRisk = fcPanel.includes('исчерпание') || fcPanel.includes('хватит')
+  const sparkEl = bottomSlot.querySelector('.uf-spark')
+  res.sparkShown = !!sparkEl && !!sparkEl.querySelector('polyline')
+  window.__TEST_STEP = 'forecast-done'
+
+  // ── idle-прогноз: расход стоит — показываем «расход не идёт» ──
+  {
+    const c0 = JSON.parse(localStorage.getItem('hermes.plugin.usage-flame.cache.current') || 'null')
+    const w0 = c0 && c0.snapshot && c0.snapshot.windows && c0.snapshot.windows[0]
+    if (w0) {
+      const reset = String(w0.resets_at || '')
+      const now0 = Date.now()
+      const arr = []
+      for (let i = 6; i >= 0; i--) arr.push([now0 - i * 600000, 91, reset])
+      const h = {}
+      h[w0.label] = arr
+      localStorage.setItem('hermes.plugin.usage-flame.hist.opencode-go', JSON.stringify(h))
+    }
+  }
+  palette.data.run()
+  let idlePanel = ''
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 120))
+    idlePanel = (bottomSlot.querySelector('[data-testid=popover]') || panel).textContent
+    if (idlePanel.includes('без изменений')) break
+  }
+  res.idleShown = idlePanel.includes('без изменений')
+  window.__TEST_STEP = 'idle-done'
+
+  // Стейл-фолбэк: сеть «упала» — панель показывает последние успешные данные с пометкой.
+  window.__MOCK_CLI_FAIL = true
+  const refreshBtn = () => [...panelLive().querySelectorAll('button')].find((b) => b.textContent.includes('Обновить сейчас'))
+  res.refreshBtnFound = !!refreshBtn()
+  // Ждём, пока все запросы улягутся (иначе react-query отдаст in-flight успех).
+  for (let i = 0; i < 60; i++) {
+    const btn = refreshBtn()
+    if (btn && !btn.disabled) break
+    await new Promise((r) => setTimeout(r, 150))
+  }
+  let stalePanel = ''
+  for (let attempt = 0; attempt < 3 && !stalePanel.includes('Нет свежих'); attempt++) {
+    palette.data.run()
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 120))
+      const pNow = bottomSlot.querySelector('[data-testid=popover]') || panel
+      stalePanel = pNow.textContent
+      if (stalePanel.includes('Нет свежих')) break
+    }
+    if (!stalePanel.includes('Нет свежих')) await new Promise((r) => setTimeout(r, 600))
+  }
+  res.staleNoteShown = stalePanel.includes('Нет свежих')
+  res.staleKeepsNumbers = stalePanel.includes('осталось') && stalePanel.includes('%')
+  res.staleNoErrorBox = !stalePanel.includes('no credential') && !stalePanel.includes('fetch failed (mock)')
+  const pNow3 = () => bottomSlot.querySelector('[data-testid=popover]') || panel
+  // Панель после инварианта пересоздана (секция снова свёрнута) — раскрываем при необходимости.
+  let provRowStale = null
+  for (let i = 0; i < 6 && !provRowStale; i++) {
+    provRowStale = [...pNow3().querySelectorAll('.uf-prov')].find((b) => b.textContent.includes('5ч')) || null
+    if (provRowStale) break
+    const tg = [...pNow3().querySelectorAll('button')].find((b) => b.textContent.includes('ВСЕ ПРОВАЙДЕРЫ'))
+    if (tg) tg.click()
+    await new Promise((r) => setTimeout(r, 300))
+  }
+  res.staleSweepKeeps = !!provRowStale && /%/.test(provRowStale.textContent)
+  const chipStale = bottomSlot.querySelector('button')
+  res.staleChipText = text(chipStale)
+  window.__MOCK_CLI_FAIL = false
+  window.__TEST_STEP = 'stale-done'
+
+  res.phase = 2
+  res.errors = window.__ERRORS.slice()
+  res.log = window.__LOG
+  const failed = Object.keys(res).filter((k) => res[k] === false)
+  document.getElementById('result').textContent = failed.length
+    ? 'ПРОВАЛЫ (' + failed.length + '): ' + failed.join(', ') + '\n' + JSON.stringify(res, null, 1)
+    : 'ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ (' + Object.keys(res).length + ' шт), ошибок: ' + (res.errors || []).length + ', уведомлений: ' + ((res.notifs || []).length) + '/' + res.notifsAfterSecond
+  window.__TEST_RESULT = res
+</script>
+</body>
+</html>

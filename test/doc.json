@@ -1,0 +1,29 @@
+{
+ "provider": "opencode-go",
+ "source": "go_usage_api",
+ "title": "Account limits",
+ "plan": null,
+ "fetched_at": "2026-10-04T12:04:44.057543+00:00",
+ "windows": [
+  {
+   "label": "Rolling window",
+   "used_percent": 1.0,
+   "resets_at": "2026-10-04T22:07:00+00:00",
+   "detail": null
+  },
+  {
+   "label": "Weekly",
+   "used_percent": 63,
+   "resets_at": "2026-10-05T00:00:00+00:00",
+   "detail": null
+  },
+  {
+   "label": "Monthly",
+   "used_percent": 96,
+   "resets_at": "2026-10-17T14:40:19+00:00",
+   "detail": null
+  }
+ ],
+ "details": [],
+ "unavailable_reason": null
+}
