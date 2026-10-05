@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-9cf)
-![Hermes](https://img.shields.io/badge/hermes-%E2%89%A50.21-orange)
+![Hermes](https://img.shields.io/badge/hermes-%E2%89%A50.21.4-orange)
 
 <img src="screenshots/01-hero-dark.png" width="640" alt="Usage Flame panel — dark theme">
 
@@ -44,7 +44,7 @@ The desktop app hot-loads it within seconds (if not: ⌘K → **Reload desktop p
 
 ## Requirements
 
-- **Hermes Agent ≥ 0.21** with the desktop app.
+- **Hermes Agent ≥ 0.21.4** with the desktop app — the plugin reads `hermes usage --json`, which shipped in 0.21.4.
 - Any provider Hermes reports usage for — OpenCode Go/Zen, OpenAI Codex, Anthropic, OpenRouter, … If a provider exposes no usage data, the plugin says so instead of inventing a bar.
 - Developed and fully tested on **Windows 10**; macOS/Linux expected to work — issues welcome.
 

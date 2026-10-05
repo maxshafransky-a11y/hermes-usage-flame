@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1 — 2026-10-05
+
+- Catalog review fix: raise `requires_hermes` to `>=0.21.4` — the plugin depends on `hermes usage --json`, which shipped in 0.21.4. README and catalog entry synced.
+
 ## 1.0.0 — 2026-10-04
 
 First public release.

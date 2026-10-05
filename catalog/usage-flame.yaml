@@ -10,7 +10,7 @@ description: >-
 maintainer: maxshafransky-a11y
 tier: community
 category: desktop
-requires_hermes: ">=0.21"
+requires_hermes: ">=0.21.4"
 platforms: [windows, macos, linux]
 docs_url: https://github.com/maxshafransky-a11y/hermes-usage-flame
 screenshots:
